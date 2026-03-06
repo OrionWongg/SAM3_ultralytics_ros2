@@ -1,0 +1,149 @@
+# SAM3 ROS2 节点配置文件
+# 所有参数均可通过 ROS2 Parameter 在运行时修改
+# 使用 launch 文件时此文件会自动加载
+
+sam3_node:
+  ros__parameters:
+
+    # ── 模型配置 ──────────────────────────────────────────────────────────────
+    # SAM3 权重文件路径（绝对路径 或 相对于工作目录的路径）
+    model_path: "/home/hkulab/sam3_ws/sam3.pt"
+
+    # 检测置信度阈值 [0.0, 1.0]
+    # 降低此值可检测更多目标，但可能产生误检
+    conf: 0.7
+
+    # 使用 FP16 半精度推理（加快速度，需 GPU 支持）
+    half: true
+
+    # ── 分割提示词 ────────────────────────────────────────────────────────────
+    # 文本提示词列表（简单名词短语，支持中文描述但建议使用英文）
+    # 示例：["person", "car", "dog", "red apple", "person wearing hat"]
+    text_prompts:
+      - "ground"
+      - "carpet"
+      - "pillar"
+      - "person"
+      - "floor"
+
+    # ── 话题配置 ──────────────────────────────────────────────────────────────
+    # 输入图像话题
+    input_topic: "/camera/camera/color/image_raw"
+
+    # ROS2 话题队列大小
+    queue_size: 1
+
+    # ── 性能调节 ──────────────────────────────────────────────────────────────
+    # 跳帧数：每处理 1 帧，跳过 N 帧（0 = 不跳帧，处理每一帧）
+    skip_frames: 0
+
+    # 推理分辨率（长边像素数），图像会被等比缩放后送入模型
+    # 必须是 SAM3 最大步长 14 的倍数，否则会自动向上取整
+    # 630（14×45） → 更快；644（14×46） → 默认均衡；1008（14×72） → 精度优先
+    imgsz: 518
+
+    # 推理设备，多卡时可改为 cuda:1 等
+    device: "cuda:0"
+
+    # 模型加载后预热推理次数，消除首帧 JIT 编译延迟（建议 2-3）
+    warmup_iters: 2
+
+    # 是否发布标注可视化图像（关闭可完全跳过 result.plot() 开销）
+    publish_annotated: true
+
+# ─────────────────────────────────────────────────────────────────────────────
+depth_estimator_node:
+  ros__parameters:
+
+    # ── 订阅话题 ──────────────────────────────────────────────────────────────
+    # 对齐深度图话题（RealSense aligned_depth_to_color，16UC1，单位 mm）
+    depth_image_topic: "/camera/camera/aligned_depth_to_color/image_raw"
+
+    # 深度相机内参话题
+    camera_info_topic: "/camera/camera/aligned_depth_to_color/camera_info"
+
+    # SAM3 检测结果话题（sam3_msgs/DetectionArray）
+    sam3_detections_topic: "/sam3/detections"
+
+    # ── 发布话题 ──────────────────────────────────────────────────────────────
+    # 输出（含深度 + 三维位置的 DetectionArray）话题
+    output_topic: "/sam3/detections_3d"
+
+    # 叠加深度信息的标注图：输入 / 输出话题
+    annotated_image_topic: "/sam3/image_annotated"
+    output_annotated_topic: "/sam3/image_annotated_3d"
+
+    # ── 时间同步 ──────────────────────────────────────────────────────────────
+    # 话题缓冲队列大小（深度图 20Hz × 1s 缓冲 = 20 条）
+    queue_size: 20
+
+    # ApproximateTimeSynchronizer 容差（秒）
+    # SAM3 推理有延迟，适当放宽此值以提高配对成功率
+    sync_slop: 0.5
+
+    # ── 与 sam3_node 一致的推理分辨率 ─────────────────────────────────────────
+    # 必须与 sam3_node 的 imgsz 参数保持一致，用于将 bbox 坐标映射回原始深度图
+    imgsz: 518
+
+    # ── 深度换算 ──────────────────────────────────────────────────────────────
+    # 深度原始值 × depth_scale = 深度（米）
+    # RealSense 16UC1 默认单位为 mm，故 depth_scale = 0.001
+    depth_scale: 0.001
+
+    # 超出此距离（米）视为无效深度
+    max_depth: 10.0
+
+    # 几何中心周围的采样半径（像素），对该正方形区域内有效深度取中位数
+    # 0 = 仅取单点；建议设为 3~5 以提高鲁棒性
+    sample_radius: 3
+
+    # 三维坐标的参考系 frame_id（需与相机光学帧一致）
+    frame_id: "camera_color_optical_frame"
+
+# ─────────────────────────────────────────────────────────────────────────────
+bev_projector_node:
+  ros__parameters:
+
+    # ── 订阅话题 ──────────────────────────────────────────────────────────────
+    depth_image_topic:   "/camera/camera/aligned_depth_to_color/image_raw"
+    color_image_topic:   "/camera/camera/color/image_raw"
+    camera_info_topic:   "/camera/camera/aligned_depth_to_color/camera_info"
+    detections_3d_topic: "/sam3/detections_3d"
+
+    # ── 发布话题 ──────────────────────────────────────────────────────────────
+    # /sam3/bev/pointcloud  — PointCloud2，按类别着色的三维点云
+    # /sam3/bev/markers     — MarkerArray，检测目标3D标注
+    # /sam3/bev/image       — Image，BEV 光栅俯视图
+
+    # ── 坐标/时间参数 ─────────────────────────────────────────────────────────
+    frame_id:    "camera_color_optical_frame"
+    queue_size:  20
+    sync_slop:   0.5
+
+    # ── 与其他节点保持一致 ────────────────────────────────────────────────────
+    imgsz:       518
+    depth_scale: 0.001
+    max_depth:   10.0
+
+    # ── 点云下采样 ────────────────────────────────────────────────────────────
+    # 每隔 downsample_step-1 个像素采一个点，降低点云密度减少带宽
+    # 1 = 全分辨率；2 = 1/4点数（常用）；4 = 1/16点数
+    downsample_step: 3
+
+    # ── BEV 图像参数 ──────────────────────────────────────────────────────────
+    # BEV 图像 X 轴单侧范围（米），图像宽 = 2 × bev_x_range / bev_resolution
+    bev_x_range:    5.0
+
+    # BEV 图像 Z 轴最大深度（米），图像高 = bev_z_max / bev_resolution
+    bev_z_max:      10.0
+
+    # 每像素代表的物理距离（米）
+    # 0.02 → 500×1000 px；0.05 → 200×400 px（更小图像，适合低带宽）
+    bev_resolution: 0.02
+
+    # ── 可视化选项 ────────────────────────────────────────────────────────────
+    # RViz2 Marker 存活时间（秒），0 = 永久（不清除旧帧）
+    marker_lifetime_sec: 0.5
+
+    # 点云着色方式：true = 分割类别色 + 灰化背景；false = 原始 RGB
+    colorize_with_class: true
